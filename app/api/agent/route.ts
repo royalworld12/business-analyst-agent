@@ -2,6 +2,8 @@ import { createAgentGraph } from '@/lib/agent/graph'
 import { sendNode } from '@/lib/agent/nodes'
 import { HumanMessage } from '@langchain/core/messages'
 
+export const maxDuration = 60
+
 export async function POST(req: Request) {
   const body = await req.json()
   const { query, approved, recipient } = body
@@ -53,7 +55,8 @@ export async function POST(req: Request) {
     query,
     status: 'searching' as const,
     approved,
-    emailDraft: recipient ? { recipient } : undefined
+    // Pass a full-shape draft so LangGraph v1's strict Annotation type accepts it.
+    emailDraft: recipient ? { subject: '', body: '', recipient } : undefined
   }
 
   try {

@@ -1,8 +1,51 @@
-import { StateGraph } from '@langchain/langgraph'
+import { StateGraph, Annotation, START, END } from '@langchain/langgraph'
+import { BaseMessage } from '@langchain/core/messages'
 import { AgentState } from '@/lib/types'
 import { researchNode, analyzeNode, draftNode, sendNode } from './nodes'
 
-function routeNext(state: AgentState): string {
+// LangGraph v1 uses Annotation.Root instead of the old `channels` object.
+const AgentAnnotation = Annotation.Root({
+  messages: Annotation<BaseMessage[]>({
+    // Nodes already return [...state.messages, newMessage], so just take `next`.
+    // Using [...prev, ...next] here would duplicate messages exponentially.
+    reducer: (prev, next) => next ?? prev,
+    default: () => [],
+  }),
+  query: Annotation<string>({
+    reducer: (prev, next) => next || prev,
+    default: () => '',
+  }),
+  searchResults: Annotation<AgentState['searchResults']>({
+    reducer: (prev, next) => next || prev,
+    default: () => undefined,
+  }),
+  reportContent: Annotation<AgentState['reportContent']>({
+    reducer: (prev, next) => next || prev,
+    default: () => undefined,
+  }),
+  analysis: Annotation<AgentState['analysis']>({
+    reducer: (prev, next) => next || prev,
+    default: () => undefined,
+  }),
+  emailDraft: Annotation<AgentState['emailDraft']>({
+    reducer: (prev, next) => next || prev,
+    default: () => undefined,
+  }),
+  approved: Annotation<AgentState['approved']>({
+    reducer: (prev, next) => next ?? prev,
+    default: () => undefined,
+  }),
+  status: Annotation<AgentState['status']>({
+    reducer: (prev, next) => next || prev,
+    default: () => 'idle' as const,
+  }),
+  error: Annotation<AgentState['error']>({
+    reducer: (prev, next) => next || prev,
+    default: () => undefined,
+  }),
+})
+
+function routeNext(state: typeof AgentAnnotation.State) {
   // Nodes set `status` to indicate what should run NEXT,
   // so map the *new* status to the next node.
   switch (state.status) {
@@ -12,41 +55,24 @@ function routeNext(state: AgentState): string {
       return 'draft'
     case 'awaiting_approval':
       // Pause for human approval — do NOT go to `send` yet.
-      return '__end__'
+      return END
     case 'sending':
       return 'send'
     default:
-      return '__end__'
+      return END
   }
 }
 
 export function createAgentGraph() {
-  const workflow = new StateGraph<AgentState>({
-    channels: {
-      // Nodes already return [...state.messages, newMessage], so just take `next`.
-      // Using [...prev, ...next] here would duplicate messages exponentially.
-      messages: { value: (prev, next) => next ?? prev },
-      query: { value: (prev, next) => next || prev },
-      searchResults: { value: (prev, next) => next || prev },
-      reportContent: { value: (prev, next) => next || prev },
-      analysis: { value: (prev, next) => next || prev },
-      emailDraft: { value: (prev, next) => next || prev },
-      approved: { value: (prev, next) => next ?? prev },
-      status: { value: (prev, next) => next || prev },
-      error: { value: (prev, next) => next || prev }
-    }
-  })
-
-  workflow.addNode('research', researchNode)
-  workflow.addNode('analyze', analyzeNode)
-  workflow.addNode('draft', draftNode)
-  workflow.addNode('send', sendNode)
-
-  workflow.setEntryPoint('research')
-  workflow.addConditionalEdges('research', routeNext)
-  workflow.addConditionalEdges('analyze', routeNext)
-  workflow.addConditionalEdges('draft', routeNext)
-  workflow.addEdge('send', '__end__')
-
-  return workflow.compile()
+  return new StateGraph(AgentAnnotation)
+    .addNode('research', researchNode)
+    .addNode('analyze', analyzeNode)
+    .addNode('draft', draftNode)
+    .addNode('send', sendNode)
+    .addEdge(START, 'research')
+    .addConditionalEdges('research', routeNext)
+    .addConditionalEdges('analyze', routeNext)
+    .addConditionalEdges('draft', routeNext)
+    .addEdge('send', END)
+    .compile()
 }
